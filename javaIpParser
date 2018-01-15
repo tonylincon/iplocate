@@ -1,0 +1,238 @@
+package org.javali.qqip;
+
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
+import java.io.RandomAccessFile;
+
+public class IPParser {
+	private String dbPath = "QQWry.Dat";
+
+	private String country, localStr;
+
+	private long ipn;
+
+	private int recordCount, countryFlag;
+
+	private long rangE, rangB, offSet, startIP, endIP, firstStartIP,
+			lastStartIP, endIPOff;
+
+	private RandomAccessFile fis;
+
+	private byte[] buff;
+
+	private long B2L(byte[] b) {
+		long ret = 0;
+		for (int i = 0; i < b.length; i++) {
+			long t = 1L;
+			for (int j = 0; j < i; j++)
+				t = t * 256L;
+			ret += ((b[i] < 0) ? 256 + b[i] : b[i]) * t;
+		}
+		return ret;
+	}
+
+	private long ipToInt(String ip) {
+		String[] arr = ip.split("\\.");
+		long ret = 0;
+		for (int i = 0; i < arr.length; i++) {
+			long l = 1;
+			for (int j = 0; j < i; j++)
+				l *= 256;
+			try {
+				ret += Long.parseLong(arr[arr.length - i - 1]) * l;
+			} catch (Exception e) {
+				ret += 0;
+			}
+		}
+		return ret;
+	}
+
+	public void seek(String ip) {
+		try {
+			this.ipn = ipToInt(ip);
+			fis = new RandomAccessFile(this.getClass().getResource("")
+					.getPath()
+					+ this.dbPath, "r");  //数据文件该这里！！！
+			buff = new byte[4];
+			fis.seek(0);
+			fis.read(buff);
+			firstStartIP = this.B2L(buff);
+			fis.read(buff);
+			lastStartIP = this.B2L(buff);
+			recordCount = (int) ((lastStartIP - firstStartIP) / 7);
+			if (recordCount <= 1) {
+				localStr = country = "";
+			} else {
+				rangB = 0;
+				rangE = recordCount;
+				long recNo;
+				do {
+					recNo = (rangB + rangE) / 2;
+					getStartIP(recNo);
+					if (ipn == startIP) {
+						rangB = recNo;
+						break;
+					}
+					if (ipn > startIP)
+						rangB = recNo;
+					else
+						rangE = recNo;
+				} while (rangB < rangE - 1);
+
+				getStartIP(rangB);
+				getEndIP();
+				getCountry(ipn);
+			}
+			if (fis != null) {
+				fis.close();
+				fis = null;
+			}
+		} catch (Exception ex) {
+			ex.printStackTrace();
+		} finally {
+			if (fis != null) {
+				try {
+					fis.close();
+					fis = null;
+				} catch (IOException e) {
+					e.printStackTrace();
+				}
+			}
+		}
+
+	}
+
+	private String getFlagStr(long offSet) throws IOException {
+		int flag = 0;
+		do {
+			fis.seek(offSet);
+			buff = new byte[1];
+			fis.read(buff);
+			flag = (buff[0] < 0) ? 256 + buff[0] : buff[0];
+			if (flag == 1 || flag == 2) {
+				buff = new byte[3];
+				fis.read(buff);
+				if (flag == 2) {
+					countryFlag = 2;
+					endIPOff = offSet - 4;
+				}
+				offSet = this.B2L(buff);
+			} else
+				break;
+		} while (true);
+
+		if (offSet < 12) {
+			return "";
+		} else {
+			fis.seek(offSet);
+			return getStr();
+		}
+	}
+
+	private String getStr() throws IOException {
+		long l = fis.length();
+		ByteArrayOutputStream byteout = new ByteArrayOutputStream();
+		byte c = fis.readByte();
+		do {
+			byteout.write(c);
+			c = fis.readByte();
+		} while (c != 0 && fis.getFilePointer() < l);
+		return byteout.toString("gbk");
+	}
+
+	private void getCountry(long ip) throws IOException {
+		if (countryFlag == 1 || countryFlag == 2) {
+			country = getFlagStr(endIPOff + 4);
+			if (countryFlag == 1) {
+				localStr = getFlagStr(fis.getFilePointer());
+				if (ipn >= ipToInt("255.255.255.0")
+						&& ipn <= ipToInt("255.255.255.255")) {
+					localStr = getFlagStr(endIPOff + 21);
+					country = getFlagStr(endIPOff + 12);
+				}
+			} else {
+				localStr = getFlagStr(endIPOff + 8);
+			}
+		} else {
+			country = getFlagStr(endIPOff + 4);
+			localStr = getFlagStr(fis.getFilePointer());
+		}
+	}
+
+	private long getEndIP() throws IOException {
+		fis.seek(endIPOff);
+		buff = new byte[4];
+		fis.read(buff);
+		endIP = this.B2L(buff);
+		buff = new byte[1];
+		fis.read(buff);
+		countryFlag = (buff[0] < 0) ? 256 + buff[0] : buff[0];
+		return endIP;
+	}
+
+	private long getStartIP(long recNo) throws IOException {
+		offSet = firstStartIP + recNo * 7;
+		fis.seek(offSet);
+		buff = new byte[4];
+		fis.read(buff);
+		startIP = this.B2L(buff);
+		buff = new byte[3];
+		fis.read(buff);
+		endIPOff = this.B2L(buff);
+		return startIP;
+	}
+
+	public String getLocal() {
+		return this.localStr;
+	}
+	
+	/**
+	 * 处理使用的缺省值:限制最多解析20个字符,如无法解析则返回"None"<br/>
+	 * <b>also see:</b> <code>public String getLocalTrim(int max_length,String default_value)</code><br/>
+	 * create by zangxiangyu@20120201
+	 * @return
+	 */
+	public String getLocalTrimDefault(){
+		return this.getLocalTrim(20, "None");
+	}
+
+	/**
+	 * 有些ISP解析会过长,超过数据库声明长度的限制,近而导致SQL错误;为解决此问题做些限定方法.<br/>
+	 * create by zangxiangyu@20120201
+	 * @param max_length 
+	 *  					最长允许的字符数
+	 * @param default_value 
+	 * 						如果解释不了,默认的返回值
+	 * @return
+	 */
+	public String getLocalTrim(int max_length,String default_value){
+		if(this.localStr!= null){
+			if(this.localStr.length()<= max_length){
+				return this.localStr;
+			}
+			return this.localStr.substring(0, max_length);
+		} else {
+			return default_value;
+		}
+	}
+	
+	public String getCountry() {
+		return this.country;
+	}
+
+	public void setPath(String path) {
+		this.dbPath = path;
+	}
+
+	public static void main(String[] args) throws Exception {
+		String s = "1.2.3.4";
+		String[] str = s.split(",");
+		IPParser w = new IPParser();
+		for (int i = 0; i < str.length; i++) {
+			w.seek(str[i]);
+			String temp = w.getCountry() + " " + w.getLocal();
+			System.out.println(str[i]+","+temp);
+		}
+	}
+
+}
